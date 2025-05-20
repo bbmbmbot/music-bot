@@ -11,28 +11,28 @@ from telegram.ext import (
     filters,
 )
 
+# Указываем путь до FFmpeg (если установлен вручную)
 ffmpeg_path = r"C:\FFmpeg\ffmpeg-7.1.1-essentials_build\bin"
 os.environ["PATH"] += os.pathsep + ffmpeg_path
 
-BOT_TOKEN = '7820967332:AAFfKslQRCAKuD-12zxu6OfZdxaEsvPWElE'  # <-- вставьте сюда токен вашего бота
+# Вставь свой токен ниже
+BOT_TOKEN = '7820967332:AAFfKslQRCAKuD-12zxu6OfZdxaEsvPWElE'
 
-# Кнопки меню
-menu_keyboard = InlineKeyboardMarkup(
-    [
-        [InlineKeyboardButton("🎵 Найти песню", callback_data='find_song')],
-    ]
-)
+# Клавиатура
+menu_keyboard = InlineKeyboardMarkup([
+    [InlineKeyboardButton("🎵 Найти песню", callback_data='find_song')],
+    [InlineKeyboardButton("🔥 Хиты", callback_data='popular')],
+])
 
-
+# Обработчик /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Привет! Я музыкальный бот.\n"
-        "Нажми кнопку ниже, чтобы найти песню.",
+        "👋 Привет! Я музыкальный бот.\nНажми кнопку ниже, чтобы найти песню или послушать хиты.",
         reply_markup=menu_keyboard
     )
 
-
-async def download_music(query: str) -> tuple[str, str, str, str]:
+# Загрузка песни
+async def send_song(query: str, message, context):
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': 'song_%(id)s.%(ext)s',
@@ -45,56 +45,52 @@ async def download_music(query: str) -> tuple[str, str, str, str]:
         }],
     }
 
-    # Попытка скачать с YouTube
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(f"ytsearch:{query}", download=True)
-        if 'entries' in info and info['entries']:
-            info = info['entries'][0]
-            filename = ydl.prepare_filename(info)
-            mp3_filename = os.path.splitext(filename)[0] + '.mp3'
+    search_queries = [f"ytsearch:{query}", f"scsearch:{query}"]
+    for search_query in search_queries:
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(search_query, download=True)
+                if 'entries' in info and info['entries']:
+                    info = info['entries'][0]
 
-            title = info.get('title', 'Unknown title')
-            artist = info.get('artist') or info.get('uploader') or 'Unknown artist'
-            thumbnail = info.get('thumbnail')
+                filename = ydl.prepare_filename(info)
+                mp3_filename = os.path.splitext(filename)[0] + '.mp3'
 
-            clean_title = re.sub(r'[\\/:"*?<>|]+', '', title)
-            clean_artist = re.sub(r'[\\/:"*?<>|]+', '', artist)
-            new_filename = f"{clean_artist} — {clean_title}.mp3"
-            os.rename(mp3_filename, new_filename)
+                title = info.get('title', 'Unknown title')
+                artist = info.get('artist') or info.get('uploader') or 'Unknown artist'
+                thumbnail = info.get('thumbnail')
 
-            return new_filename, clean_title, clean_artist, thumbnail
+                clean_title = re.sub(r'[\\/:"*?<>|]+', '', title)
+                clean_artist = re.sub(r'[\\/:"*?<>|]+', '', artist)
+                new_filename = f"{clean_artist} — {clean_title}.mp3"
+                os.rename(mp3_filename, new_filename)
 
-    # Если не нашли на YouTube, пробуем SoundCloud
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(f"scsearch:{query}", download=True)
-        if 'entries' in info and info['entries']:
-            info = info['entries'][0]
-            filename = ydl.prepare_filename(info)
-            mp3_filename = os.path.splitext(filename)[0] + '.mp3'
+                if thumbnail:
+                    await message.reply_photo(photo=thumbnail)
 
-            title = info.get('title', 'Unknown title')
-            artist = info.get('artist') or info.get('uploader') or 'Unknown artist'
-            thumbnail = info.get('thumbnail')
+                with open(new_filename, 'rb') as audio:
+                    await message.reply_audio(audio=audio, title=title, performer=artist)
 
-            clean_title = re.sub(r'[\\/:"*?<>|]+', '', title)
-            clean_artist = re.sub(r'[\\/:"*?<>|]+', '', artist)
-            new_filename = f"{clean_artist} — {clean_title}.mp3"
-            os.rename(mp3_filename, new_filename)
+                os.remove(new_filename)
+                await message.reply_text("✅ Готово! Вот твоя песня 🎶")
+                return
+        except Exception as e:
+            print(f"[Ошибка при поиске в {search_query}]: {e}")
 
-            return new_filename, clean_title, clean_artist, thumbnail
+    await message.reply_text("❌ Песня не найдена ни на YouTube, ни на SoundCloud.")
 
-    raise Exception("Песня не найдена ни на YouTube, ни на SoundCloud.")
-
-
+# Обработка кнопок
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     if query.data == 'find_song':
         context.user_data['awaiting_query'] = True
-        await query.message.reply_text("Напиши название или исполнителя песни, которую хочешь найти.")
+        await query.message.reply_text("🎧 Напиши название или исполнителя песни.")
+    elif query.data == 'popular':
+        await send_song("топ хиты", query.message, context)
 
-
+# Обработка сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get('awaiting_query'):
         query_text = update.message.text
@@ -102,22 +98,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await update.message.reply_text(f"🔍 Ищу: {query_text} ...")
 
         try:
-            mp3_file, title, artist, thumbnail = await download_music(query_text)
-
-            if thumbnail:
-                await update.message.reply_photo(photo=thumbnail)
-
-            with open(mp3_file, 'rb') as audio:
-                await update.message.reply_audio(audio=audio, title=title, performer=artist)
-
-            os.remove(mp3_file)
-            await msg.edit_text("Готово! Вот твоя песня 🎶")
+            await send_song(query_text, update.message, context)
+            await msg.delete()
         except Exception as e:
             await msg.edit_text(f"❌ Ошибка при загрузке: {e}")
     else:
-        await update.message.reply_text("Нажми кнопку «Найти песню», чтобы начать.")
+        await update.message.reply_text("Выбери действие с помощью кнопок 👇", reply_markup=menu_keyboard)
 
-
+# Запуск
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -125,10 +113,8 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("✅ Бот запущен и готов к работе!")
+    print("✅ Бот запущен!")
     app.run_polling()
-
 
 if __name__ == '__main__':
     main()
-
